@@ -213,12 +213,26 @@ order by encounter_key),
 -- relevant primary and secondary Dxs to the primary trigger entries; will determine relevenacy by 1st 3 bytes of the the Dx code
 relevant_Dxs as (
   select encounter_key
-  , substring(trigger_code_Dx1,1,3) as Dx1_group
-  , substring(trigger_code_Dx2,1,3) as Dx2_group
+  , substring(trigger_code_Dx1,1,3) as Dx_group
   from triggers_plus_shells
-  group by 1,2,3
+
+  UNION ALL
+  
+  select encounter_key
+    , substring(trigger_code_Dx2,1,3) as Dx_group
+    from triggers_plus_shells
+
  ),
  
+ relevant_Dx_array as (
+select encounter_key
+, array_join(array_agg(Dx_group), ',', 'NULL') as relevant_Dx_array
+from (
+ select * 
+ from relevant_Dxs  
+ group by 1,2)
+ group by encounter_key),
+
 
 -- Table to help identify records for carve out, if multiple PALs happen within same encounter
 
@@ -235,20 +249,22 @@ M_assignment_nocarve as (
 select a.* 
 , (case when a.rank_PAL_enc_key = 1 then sum(b.allowed_amount) 
    else NULL end) as enc_cost_no_carveout
+, (case when a.rank_PAL_enc_key = 1 then max(b.paid_date)
+   else NULL end) as enc_max_paid_date
 from Primary_triggers a
 left join sample_data b
-on b.service_from_date between a.shell_start and a.shell_end
-where a.rbcs_major_ind = 'M')
-
+on a.member_ssn = b.member_ssn and (b.service_from_date between a.shell_start and a.shell_end)
+where a.rbcs_major_ind = 'M'
+  group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28),
 
 -- assigment for O rbcs categories, requires same Dx family
-/*O_assignment_nocarve as (
+O_assignment_nocarve as (
 select a.* 
-, (case when a.enc_PAL_key_rank = 1 then sum(b.allowed_amount) 
+, (case when a.rank_PAL_enc_key = 1 then sum(b.allowed_amount) 
    else NULL end) as enc_cost_no_carveout
 from Primary_triggers a
 left join sample_data b
-on (b.service_from_date between a.shell_start and a.shell_end)
+on a.member_ssn = b.member_ssn and (b.service_from_date between a.shell_start and a.shell_end)
 and substring(b.diagnosis_code1,1,3) in 
   
   (select c.Dx1_group 
@@ -256,19 +272,12 @@ and substring(b.diagnosis_code1,1,3) in
    inner join Primary_triggers a
    on a.encounter_key  = c.encounter_key)
 
-where a.rbcs_major_ind = 'O')*/
+where a.rbcs_major_ind = 'O'
+    group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28)
 
 
 select *
-from M_assignment_nocarve
+from O_assignment_nocarve
 limit 100
 
 
-
-
-
-/* select * 
-from triggers_plus_shells  
-where encounter_key  ='0162819192019-06-282019-07-03'
--- order by encounter_key
-limit 100 */ 
