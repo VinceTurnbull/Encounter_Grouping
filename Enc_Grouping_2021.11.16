@@ -65,8 +65,8 @@ order by 1,2)
   where reversal_flag != 0
 ),
 
--- Trigger ranking to break tie of multiple betos mappings that map to a PAL trigger on particular DOS and patient. 
--- Will later scan through to see if multiple triggers are within same encounter to dedup further (ex. IP stay)
+-- Trigger ranking to break tie of multiple betos mappings that map to a same category of PAL trigger on particular DOS and patient. 
+-- Will later scan through to see if multiple triggers are within same encounter to dedup further (ex two PALs during same encounter ... will carve out $s, see rank_PAL_enc_key below)
 -- We assign the highest rank (1) to PAL-BETOS combination with highest $ amount. May also want to explore using RVUs?
 
 ranked_triggers as (
@@ -195,16 +195,48 @@ select encounter_key
 , sum(allowed) as allowed
 from Join_to_triggers
 group by 1,2)) b                  
-on a.encounter_key = b.encounter_key and a.PAL_mapping = b.PAL_mapping)
+on a.encounter_key = b.encounter_key and a.PAL_mapping = b.PAL_mapping),
+
+
+-- select primary triggers
+-- PRIMARY TRIGGERS - still need one more level of deduping after this to get rid of encoutner keys in OP billed with same proc code
+Primary_triggers as (
+select * 
+from triggers_plus_shells
+where trigger_key_no_hierarchy = trigger_key_primary
+order by encounter_key)
 
 
 /******************************* Assignment**************************/
 
-select * 
-from triggers_plus_shells                 
-limit 100
+-- helper tables
+-- relevant primary and secondary Dxs to the primary trigger entries; will determine relevenacy by 1st 3 bytes of the the Dx code
+relevant_Dxs as (
+  select encounter_key
+  , substring(trigger_code_Dx1,1,3) as Dx1_group
+  , substring(trigger_code_Dx2,1,3) as Dx2_group
+  from triggers_plus_shells
+  group by 1,2,3
+ ),
+ 
+
+-- Table to help identify records for carve out, if multiple PALs happen within same encounter
+
+carve_out_records as (
+select encounter_key
+, trigger_key_primary
+, unique_key
+from Primary_triggers
+where rank_PAL_enc_key > 1)
 
 
+
+
+/* select * 
+from triggers_plus_shells  
+where encounter_key  ='0162819192019-06-282019-07-03'
+-- order by encounter_key
+limit 100 */ 
 
 
 
