@@ -16,7 +16,7 @@ FROM "testdb"."vt_sample_claimants_75kmbrs_add_utilcounting" a
 left join "reference_library"."aapc_cpt_hcpcs_grouping" b
 on a.procedure_code = b.code
 -- left join testdb.vt_sample_excellusPAL  c
--- on a.procedure_code = c.procedure_code
+
 left join "testdb"."servicemapping_betos" d
 on a.procedure_code = d.procedure_code
 order by a.member_ssn, a.service_from_date),
@@ -65,7 +65,7 @@ order by 1,2)
   where reversal_flag != 0
 ),
 
--- Trigger ranking to break tie of multiple betos mappings that map to a same category of PAL trigger on particular DOS and patient. 
+-- Trigger ranking to break tie of multiple BETOS mappings that map to a same category of PAL Trigger on particular DOS and patient.
 -- Will later scan through to see if multiple triggers are within same encounter to dedup further (ex two PALs during same encounter ... will carve out $s, see rank_PAL_enc_key below)
 -- We assign the highest rank (1) to PAL-BETOS combination with highest $ amount. May also want to explore using RVUs?
 
@@ -81,7 +81,7 @@ where rank_triggers = 1
 order by member_ssn, service_from_date),
 
 
--- MASTER TRIGGER LIST
+-- MASTER Trigger LIST
 add_trigger_key as (
 select a.*
 , concat(a.member_ssn, cast(a.service_from_date as varchar), a.trigger_code) as trigger_key_no_hierarchy
@@ -94,7 +94,7 @@ on a.member_ssn = b.member_ssn and a.service_from_date = b.service_from_date and
 /************************Shells********************/
 
 -- Shells for BETOS M codes
--- first search for facility to attach, assign 
+-- first search for facility to attach, assign
 M_encounter_key as (
 select a.* 
 , concat(member_ssn, cast(shell_start as varchar) , cast(shell_end as varchar)) as encounter_key
@@ -119,7 +119,7 @@ on (a.member_ssn = b.member_ssn and (b.service_from_date between a.coh_admit_dat
 group by 1,2,3,4,5,6,7,8,9,10,11),
 
 
--- join back to primary triggers 
+-- join back to primary triggers
 join_MTrigger_facility as(
 select a.* 
 , b.encounter_key
@@ -181,7 +181,7 @@ on c.trigger_key_no_hierarchy = d.trigger_key_no_hierarchy),
 -- 317,924 primary triggers
 
 /****** Final Trigger + Shell Table********/
--- MASTER TRIGGER LIST + SHELL DEFINITONS 
+-- MASTER Trigger LIST + SHELL DEFINITONS
 -- sum up claims to determine the PAL category with highest amount of claims on a given day (non M rbcs)
 
 triggers_plus_shells as (select a.* 
@@ -199,12 +199,12 @@ on a.encounter_key = b.encounter_key and a.PAL_mapping = b.PAL_mapping),
 
 
 -- select primary triggers
--- PRIMARY TRIGGERS - still need one more level of deduping after this to get rid of encoutner keys in OP billed with same proc code
+-- primary triggers - still need one more level of deduping after this to get rid of encoutner keys in OP billed with same proc code
 Primary_triggers as (
 select * 
 from triggers_plus_shells
 where trigger_key_no_hierarchy = trigger_key_primary
-order by encounter_key)
+order by encounter_key),
 
 
 /******************************* Assignment**************************/
@@ -227,7 +227,42 @@ select encounter_key
 , trigger_key_primary
 , unique_key
 from Primary_triggers
-where rank_PAL_enc_key > 1)
+where rank_PAL_enc_key > 1),
+
+
+-- assignment to M rbcs categories, no carve out
+M_assignment_nocarve as (
+select a.* 
+, (case when a.rank_PAL_enc_key = 1 then sum(b.allowed_amount) 
+   else NULL end) as enc_cost_no_carveout
+from Primary_triggers a
+left join sample_data b
+on b.service_from_date between a.shell_start and a.shell_end
+where a.rbcs_major_ind = 'M')
+
+
+-- assigment for O rbcs categories, requires same Dx family
+/*O_assignment_nocarve as (
+select a.* 
+, (case when a.enc_PAL_key_rank = 1 then sum(b.allowed_amount) 
+   else NULL end) as enc_cost_no_carveout
+from Primary_triggers a
+left join sample_data b
+on (b.service_from_date between a.shell_start and a.shell_end)
+and substring(b.diagnosis_code1,1,3) in 
+  
+  (select c.Dx1_group 
+   from relevant_Dxs c 
+   inner join Primary_triggers a
+   on a.encounter_key  = c.encounter_key)
+
+where a.rbcs_major_ind = 'O')*/
+
+
+select *
+from M_assignment_nocarve
+limit 100
+
 
 
 
@@ -237,10 +272,3 @@ from triggers_plus_shells
 where encounter_key  ='0162819192019-06-282019-07-03'
 -- order by encounter_key
 limit 100 */ 
-
-
-
-
-
-
-
