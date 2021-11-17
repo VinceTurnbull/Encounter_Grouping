@@ -175,47 +175,34 @@ left join add_trigger_key  b
 on a.member_ssn = b.member_ssn and (b.service_from_date between a.shell_start and a.shell_end) and a.PACT_FLAG = b.PACT_FLAG
 group by 1,2,3,4,5) d
 
-on c.trigger_key_no_hierarchy = d.trigger_key_no_hierarchy)
-
-
+on c.trigger_key_no_hierarchy = d.trigger_key_no_hierarchy),
 
 -- 656,316 total triggers
 -- 317,924 primary triggers
--- 6,474 triggers in M ; check to see all assigned
 
+/****** Final Trigger + Shell Table********/
+-- MASTER TRIGGER LIST + SHELL DEFINITONS 
+-- sum up claims to determine the PAL category with highest amount of claims on a given day (non M rbcs)
 
-select *
+triggers_plus_shells as (select a.* 
+, b.rank_PAL_enc_key
+from Join_to_triggers a
+left join (select * 
+, row_number() over (partition by encounter_key order by allowed desc) as rank_PAL_enc_key
+from (
+select encounter_key
+, PAL_mapping
+, sum(allowed) as allowed
 from Join_to_triggers
+group by 1,2)) b                  
+on a.encounter_key = b.encounter_key and a.PAL_mapping = b.PAL_mapping)
+
+
+/******************************* Assignment**************************/
+
+select * 
+from triggers_plus_shells                 
 limit 100
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
