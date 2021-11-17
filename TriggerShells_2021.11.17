@@ -1,0 +1,205 @@
+CREATE TABLE IF NOT EXISTS "testdb"."vt_sample_claimants_75kmbrs_Enc_TriggerShells" as
+
+
+-- sample data with BETOS and AAPC mappings + PAL
+with sample_data as (
+SELECT a.*
+-- , c.pal as Excellus_PAL
+, a.pal_category as PAL_mapping
+, b.short_description as AAPC_short_desc
+, b.section1 as AAPC_section1
+, b.section2 as AAPC_section2
+, d.rbcs_id
+, d.rbcs_cat_desc
+, d.rbcs_subcat_desc
+, d.rbcs_family_desc
+, d.rbcs_major_ind
+, (case when a.dsc_with_hierarchy in ('Home Health', 'SNF') then a.dsc_with_hierarchy else 'Non PACT' end )as PACT_FLAG
+FROM "testdb"."vt_sample_claimants_75kmbrs_add_utilcounting" a
+left join "reference_library"."aapc_cpt_hcpcs_grouping" b
+on a.procedure_code = b.code
+-- left join testdb.vt_sample_excellusPAL  c
+
+left join "testdb"."servicemapping_betos" d
+on a.procedure_code = d.procedure_code
+order by a.member_ssn, a.service_from_date),
+
+
+
+/********************************** Triggers************************/
+-- Trigger identification, exclude reversals map pos for the trigger; grabbing a bunch of stuff to help us fill in encounters
+-- don't know if split by proc and Dx code combination is good or not ... may make things too granualar for the trigger ranking in next step. Test out
+-- 656,316 rows
+
+triggers as(
+select * from (
+select member_ssn
+, service_from_date
+, major_service_category
+, dsc_with_hierarchy
+, dsc_no_hierarchy
+, (case when dsc_with_hierarchy in ('Home Health', 'SNF') then  dsc_with_hierarchy else 'Non PACT' end )as PACT_FLAG
+, unique_key
+, procedure_code as trigger_code
+, provider_tin
+, PAL_mapping
+, pos
+, (case 
+   when major_service_category = 'Inpatient Facility' then 'IP'
+   when major_service_category = 'Outpatient Facility' then 'OP'
+   when pos in ('13','21', '27', '28', '31', '32', '33', '34', '35', '51', '55', '56', '61') then 'IP'
+   else 'OP' end) as pos_type
+, (case 
+   when major_service_category = 'Outpatient Facility' and pos = '24' then 'ASC'
+   when major_service_category = 'Professional Services' and pos = '24' then 'ASC'
+   else NULL end) as ASC_indicator
+, diagnosis_code1 as trigger_code_dx1
+, diagnosis_code2 as trigger_code_dx2
+, rbcs_cat_desc
+, rbcs_subcat_desc
+, rbcs_family_desc 
+, rbcs_major_ind
+, reversal_flag
+, sum(allowed_amount) as allowed
+from sample_data
+where PAL_mapping is not NULL and PAL_mapping not in ('',' ')
+group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14, 15, 16,17,18, 19,20
+order by 1,2)
+  where reversal_flag != 0
+),
+
+-- Trigger ranking to break tie of multiple BETOS mappings that map to a same category of PAL Trigger on particular DOS and patient.
+-- Will later scan through to see if multiple triggers are within same encounter to dedup further (ex two PALs during same encounter ... will carve out $s, see rank_PAL_enc_key below)
+-- We assign the highest rank (1) to PAL-BETOS combination with highest $ amount. May also want to explore using RVUs?
+
+ranked_triggers as (
+select * 
+  , concat(member_ssn, cast(service_from_date as varchar), trigger_code) as trigger_key_primary
+  from (
+select a.*
+, (row_number() over (partition by member_ssn, service_from_date, PAL_mapping order by allowed desc) ) rank_triggers
+from triggers a
+) 
+where rank_triggers = 1
+order by member_ssn, service_from_date),
+
+
+-- MASTER Trigger LIST
+add_trigger_key as (
+select a.*
+, concat(a.member_ssn, cast(a.service_from_date as varchar), a.trigger_code) as trigger_key_no_hierarchy
+, b.trigger_key_primary 
+from triggers a
+inner join ranked_triggers b
+on a.member_ssn = b.member_ssn and a.service_from_date = b.service_from_date and a.PAL_mapping = b.PAL_mapping),
+
+
+/************************Shells********************/
+
+-- Shells for BETOS M codes
+-- first search for facility to attach, assign
+M_encounter_key as (
+select a.* 
+, concat(member_ssn, cast(shell_start as varchar) , cast(shell_end as varchar)) as encounter_key
+from (
+
+select a.coh_admit_date
+, a.coh_discharge_date
+, a.major_service_category
+, a.dsc_with_hierarchy
+, b.member_ssn
+, b.service_from_date
+, b.trigger_key_no_hierarchy
+, b.trigger_key_primary
+, b.unique_key
+, ( min(a.coh_admit_date) over (partition by trigger_key_primary) ) as shell_start
+, ( max(a.coh_discharge_date) over (partition by trigger_key_primary) ) as shell_end
+from sample_data a
+inner join (select * 
+   from add_trigger_key 
+   where rbcs_major_ind = 'M') b 
+on (a.member_ssn = b.member_ssn and (b.service_from_date between a.coh_admit_date and  a.coh_discharge_date)) and a.PACT_FLAG = b.PACT_FLAG) a
+group by 1,2,3,4,5,6,7,8,9,10,11),
+
+
+-- join back to primary triggers
+join_MTrigger_facility as(
+select a.* 
+, b.encounter_key
+, b.shell_start
+, b.shell_end
+from add_trigger_key a
+left join (select trigger_key_primary, encounter_key, shell_start, shell_end from M_encounter_key group by 1,2,3,4) b
+on a.trigger_key_primary = b.trigger_key_primary
+where a.trigger_key_primary = a.trigger_key_no_hierarchy),
+
+
+
+dedup_MTrigger_facility as (
+select * from (
+select member_ssn
+, encounter_key
+, shell_start
+, shell_end
+, PACT_FLAG
+, min(service_from_date) OVER (partition by encounter_key) as encounter_incurred_date
+from join_MTrigger_facility 
+where encounter_key is not NULL )
+group by 1,2,3,4,5,6),
+
+
+
+-- join back to all triggers
+-- make sure all M rbcs levels get assigned; noticed a few records where the professional charge occured a few days before a facility admit, so handle as start and end on same day
+Join_to_triggers as(
+
+select  c.*
+  , (case
+    when d.encounter_key is not NULL then d.encounter_key
+    else concat(member_ssn, cast(c.service_from_date as varchar) , cast(c.service_from_date as varchar)) end) as encounter_key
+  , (case
+    when d.shell_start is not NULL then d.shell_start 
+    else c.service_from_date end) as shell_start
+  , (case
+    when d.shell_end is not NULL then d.shell_end
+    else c.service_from_date end) as shell_end
+  , (case
+    when d.encounter_incurred_date is not NULL then d.encounter_incurred_date
+    else  c.service_from_date end) as encounter_incurred_date
+from add_trigger_key c
+
+left join (
+select  a.encounter_key 
+, a.shell_start
+, a.shell_end
+, a.encounter_incurred_date
+, b.trigger_key_no_hierarchy
+from dedup_MTrigger_facility a
+left join add_trigger_key  b
+on a.member_ssn = b.member_ssn and (b.service_from_date between a.shell_start and a.shell_end) and a.PACT_FLAG = b.PACT_FLAG
+group by 1,2,3,4,5) d
+
+on c.trigger_key_no_hierarchy = d.trigger_key_no_hierarchy),
+
+-- 656,316 total triggers
+-- 317,924 primary triggers
+
+/****** Final Trigger + Shell Table********/
+-- MASTER Trigger LIST + SHELL DEFINITONS
+-- sum up claims to determine the PAL category with highest amount of claims on a given day (non M rbcs)
+
+triggers_plus_shells as (select a.* 
+, b.rank_PAL_enc_key
+from Join_to_triggers a
+left join (select * 
+, row_number() over (partition by encounter_key order by allowed desc) as rank_PAL_enc_key
+from (
+select encounter_key
+, PAL_mapping
+, sum(allowed) as allowed
+from Join_to_triggers
+group by 1,2)) b                  
+on a.encounter_key = b.encounter_key and a.PAL_mapping = b.PAL_mapping)
+
+
+select * from triggers_plus_shells
