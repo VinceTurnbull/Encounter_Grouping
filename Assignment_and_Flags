@@ -137,14 +137,87 @@ UNION ALL
 select * from AllOther_assignment_nocarve),
 
 -- final dedup for procs bill OP under same proc code
-
 dedup_encounters as (
 select * from (
 select a.*
 , row_number() over (partition by encounter_key, enc_cost_no_carveout, rank_pal_enc_key order by allowed desc) dedup_enc_allowed
 from Merge_Tables a)
-where dedup_enc_allowed = 1)
+where dedup_enc_allowed = 1),
 
+
+
+/********************* Xwalk from Enc to Claims Table ********************/
+
+-- assignment to M rbcs categories, no carve out
+M_assignment_nocarve_Xwalk as (
+select a.encounter_key 
+, (case when a.rank_PAL_enc_key = 1 then b.unique_key
+   else NULL end) as unique_key_xwalk
+from add_relevant_dxs a
+left join sample_data b
+on a.member_ssn = b.member_ssn 
+and (b.service_from_date between a.shell_start and a.shell_end)
+and a.PACT_FLAG = b.PACT_FLAG
+where a.rbcs_major_ind = 'M'
+  group by 1,2),
+
+-- assigment for O rbcs categories, requires same Dx family
+O_assignment_nocarve_Xwalk as (
+select a.encounter_key  
+, (case when a.rank_PAL_enc_key = 1 then b.unique_key
+   else NULL end) as unique_key_xwalk
+from add_relevant_dxs a
+left join sample_data b
+on a.member_ssn = b.member_ssn 
+and (b.service_from_date between a.shell_start and a.shell_end)
+and a.PACT_FLAG = b.PACT_FLAG
+and a.relevant_Dx_array LIKE  concat('%', trim(substring(b.diagnosis_code1,1,3)) ,'%')
+  
+where a.rbcs_major_ind = 'O'
+    group by 1,2),
+
+
+-- assigment for all others, requires same Dx family & provider TIN
+AllOther_assignment_nocarve_Xwalk as (
+select a.encounter_key 
+, (case when a.rank_PAL_enc_key = 1 then b.unique_key
+   else NULL end) as unique_key_xwalk
+from add_relevant_dxs a
+left join sample_data b
+on a.member_ssn = b.member_ssn 
+and (b.service_from_date between a.shell_start and a.shell_end)
+and a.PACT_FLAG = b.PACT_FLAG
+and a.relevant_Dx_array LIKE  concat('%', trim(substring(b.diagnosis_code1,1,3)) ,'%')
+and a.provider_tin = b.provider_tin
+where a.rbcs_major_ind not in( 'O', 'M')
+    group by 1,2),
+
+Merge_Xwalk_Tables as
+(select * from M_assignment_nocarve_Xwalk
+
+Union ALL 
+
+select * from O_assignment_nocarve_Xwalk
+
+UNION ALL
+
+select * from AllOther_assignment_nocarve_Xwalk),
+
+XWalk_to_Claims as (
+select * 
+from Merge_Xwalk_Tables 
+group by 1,2
+order by 1,2)
+
+
+/********************* Flags ********************/
+-- ER
+-- HH, SNF %
+-- HH, SNF $
+-- Readmit rates
+
+
+/********************* Testing ********************/
 select pal_mapping
 -- , rbcs_cat_desc
 -- , rbcs_subcat_desc
@@ -165,4 +238,3 @@ order by 1,2,3
 -- 168526616
 -- 317,905 primary triggers before final dedup
 -- 317,927
-
