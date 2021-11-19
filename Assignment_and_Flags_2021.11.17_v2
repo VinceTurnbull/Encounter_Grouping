@@ -224,33 +224,52 @@ select encounter_key
    when trigger_code_dx2 between 'T00' and 'T88' then 1 
    else 0 end) as stochastic_event_flag
 from dedup_encounters
-where rank_pal_enc_key = 1)
+where rank_pal_enc_key = 1),
 
-
-
+add_stochastic_event_flag as (
 select a.*
 , (case 
    when encounter_key in (select encounter_key from stochastic_event where stochastic_event_flag = 1) then 1 
    else 0 end) as stocahstic_event_flag
-from dedup_encounters a
-limit 100
-
+from dedup_encounters a),
 
 -- ER event; if there is an ER admit on the same day as the beginning of the trigger event, flag for exclusion
+Identify_ER as (
+select distinct a.encounter_key
+from add_stochastic_event_flag a
+inner join sample_data b
+on a.member_ssn = b.member_ssn
+and a.shell_start = b.service_from_date
+where (b.pos = '23' or b.dsc_with_hierarchy LIKE  '%Emergency Room%') 
+),
+
+Add_ER_Flag as (
+select a.*
+, (case 
+   when encounter_key in (select encounter_key from Identify_ER) then 1 
+   else 0 end) as  ER_flag
+from add_stochastic_event_flag a)
 
 
 
-
-
+-- paid date for IBNR
 -- HH, SNF %
 -- HH, SNF $
 -- Readmit rates
 
 
 /********************* Summaries ********************/
--- select * 
--- from dedup_encounters
--- where encounter_key = '3156854982019-01-012019-01-14'
+select pal_mapping
+, pos_type
+, count(*) as enc_count
+, sum(enc_cost_no_carveout) as enc_allowed
+from Add_ER_Flag
+where stocahstic_event_flag != 1
+and ER_Flag != 1
+and rank_pal_enc_key = 1
+group by 1,2
+
+
 
 
 
