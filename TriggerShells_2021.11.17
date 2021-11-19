@@ -40,6 +40,7 @@ select member_ssn
 , dsc_no_hierarchy
 , (case when dsc_with_hierarchy in ('Home Health', 'SNF') then  dsc_with_hierarchy else 'Non PACT' end )as PACT_FLAG
 , unique_key
+, unique_key_ungrouped
 , procedure_code as trigger_code
 , provider_tin
 , PAL_mapping
@@ -63,7 +64,7 @@ select member_ssn
 , sum(allowed_amount) as allowed
 from sample_data
 where PAL_mapping is not NULL and PAL_mapping not in ('',' ')
-group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14, 15, 16,17,18, 19,20
+group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14, 15, 16,17,18, 19,20,21
 order by 1,2)
   where reversal_flag != 0
 ),
@@ -112,6 +113,7 @@ select a.coh_admit_date
 , b.trigger_key_no_hierarchy
 , b.trigger_key_primary
 , b.unique_key
+, b.unique_key_ungrouped
 , ( min(a.coh_admit_date) over (partition by trigger_key_primary) ) as shell_start
 , ( max(a.coh_discharge_date) over (partition by trigger_key_primary) ) as shell_end
 from sample_data a
@@ -119,7 +121,7 @@ inner join (select *
    from add_trigger_key 
    where rbcs_major_ind = 'M') b 
 on (a.member_ssn = b.member_ssn and (b.service_from_date between a.coh_admit_date and  a.coh_discharge_date)) and a.PACT_FLAG = b.PACT_FLAG) a
-group by 1,2,3,4,5,6,7,8,9,10,11),
+group by 1,2,3,4,5,6,7,8,9,10,11,12),
 
 
 -- join back to primary triggers
@@ -181,8 +183,6 @@ group by 1,2,3,4,5) d
 
 on c.trigger_key_no_hierarchy = d.trigger_key_no_hierarchy),
 
--- 656,316 total triggers
--- 317,924 primary triggers
 
 /****** Final Trigger + Shell Table********/
 -- MASTER Trigger LIST + SHELL DEFINITONS
@@ -202,4 +202,7 @@ group by 1,2)) b
 on a.encounter_key = b.encounter_key and a.PAL_mapping = b.PAL_mapping)
 
 
-select * from triggers_plus_shells
+select * 
+from triggers_plus_shells
+
+
