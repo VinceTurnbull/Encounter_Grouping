@@ -157,7 +157,7 @@ select a.encounter_key
    else NULL end) as unique_key_xwalk
 , (case when a.rank_PAL_enc_key = 1 then a.rbcs_major_ind
    else NULL end) rbcs_major_ind
-from add_relevant_dxs a
+from dedup_encounters a
 left join sample_data b
 on a.member_ssn = b.member_ssn 
 and (b.service_from_date between a.shell_start and a.shell_end)
@@ -173,7 +173,7 @@ select a.encounter_key
    else NULL end) as unique_key_xwalk
 , (case when a.rank_PAL_enc_key = 1 then a.rbcs_major_ind
    else NULL end) rbcs_major_ind
-from add_relevant_dxs a
+from dedup_encounters a
 left join sample_data b
 on a.member_ssn = b.member_ssn 
 and (b.service_from_date between a.shell_start and a.shell_end)
@@ -192,7 +192,7 @@ select a.encounter_key
    else NULL end) as unique_key_xwalk
 , (case when a.rank_PAL_enc_key = 1 then a.rbcs_major_ind
    else NULL end) rbcs_major_ind
-from add_relevant_dxs a
+from dedup_encounters a
 left join sample_data b
 on a.member_ssn = b.member_ssn 
 and (b.service_from_date between a.shell_start and a.shell_end)
@@ -213,6 +213,7 @@ select * from O_assignment_nocarve_Xwalk
 UNION ALL
 
 select * from AllOther_assignment_nocarve_Xwalk),
+
 
 XWalk_to_Claims as (
 select * 
@@ -297,7 +298,9 @@ on a.unique_key_xwalk = b.unique_key_ungrouped
 where a.rbcs_major_ind != 'M'
 group by 1,2,3)
 
-/*select * from (
+
+
+select * from (
 select a.* 
 , b.enc_cost_no_carveout as enc_allowed_from_encTable
 , sum(a.allowed_from_ClaimsTable) over (partition by a.encounter_key) as enc_allowed_from_claims
@@ -306,11 +309,15 @@ left join Add_ER_Flag b
 on a.encounter_key = b.encounter_key
 where b.rank_pal_enc_key = 1)
 where enc_allowed_from_encTable != enc_allowed_from_claims
-order by encounter_key*/
+and encounter_key = '2454262502019-04-062019-04-16'
+order by encounter_key
 
-select * from Add_ER_Flag where encounter_key = '2298207282019-08-142019-08-23'
+-- select * from XWalk_to_Claims 
+-- where encounter_key = '2298207282019-08-142019-08-23'
 
 
+
+-- select * from Add_ER_Flag where encounter_key = '2298207282019-08-142019-08-23'
 
 
 /*select pal_mapping
