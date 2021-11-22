@@ -256,7 +256,7 @@ select a.*
 , (case 
    when encounter_key in (select encounter_key from Identify_ER) then 1 
    else 0 end) as  ER_flag
-from add_stochastic_event_flag a),
+from add_stochastic_event_flag a)
 
 
 
@@ -274,7 +274,7 @@ from add_stochastic_event_flag a),
 
 -- check to make sure encounter Table costs equal mapping on claims Table
 
-check_xwalk as 
+/*check_xwalk as 
 (select a.encounter_key
 , a.unique_key_xwalk
 , a.rbcs_major_ind
@@ -319,8 +319,10 @@ order by encounter_key
 
 -- select * from Add_ER_Flag where encounter_key = '2298207282019-08-142019-08-23'
 
+*/
 
-/*select pal_mapping
+
+select pal_mapping
 , pos_type
 , count(*) as enc_count
 , sum(enc_cost_no_carveout) as enc_allowed
@@ -328,4 +330,7 @@ from Add_ER_Flag
 where stocahstic_event_flag != 1
 and ER_Flag != 1
 and rank_pal_enc_key = 1
-group by 1,2*/
+group by 1,2
+order by 1,2
+
+
