@@ -348,7 +348,8 @@ and pact_flag = 'Non PACT'
 and rbcs_major_ind in ('M')
 group by 1,2),
 
-  
+
+-- clean up final pos type, also add time window for post acute analysis flags
   final_pos_type as (
   select *
   , (case when (acute_IP_flag = 1 
@@ -362,5 +363,10 @@ group by 1,2),
                 and  pact_flag = 'Non PACT' 
                 and rbcs_major_ind in ('M')) then 'OP'
      else pos_type end) as final_pos_type
+  , date_add('day', 7, shell_close) as seven_day_window
+  , date_add('day', 30, shell_close) as thirty_day_window
+  , date_add('day', 60, shell_close) as sixty_day_window
   from acute_IP_flag)
+
+
 
