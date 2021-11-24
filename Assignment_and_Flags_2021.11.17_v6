@@ -500,6 +500,15 @@ select a.*
    when SNF_sixty_days > 0 then 1
    else NULL end) as SNF_sixty_days_flag
 , (case
+   when HH_seven_days > 0 then 1
+   else NULL end) as HH_seven_days_flag
+, (case
+   when HH_thirty_days > 0 then 1
+   else NULL end) as HH_thirty_days_flag
+, (case
+   when HH_sixty_days > 0 then 1
+   else NULL end) as HH_sixty_days_flag
+, (case
    when (a.acute_IP_flag = 1 
    and a.final_pos_type = 'IP' 
    and a.rank_pal_enc_key = 1
@@ -512,7 +521,7 @@ on a.member_ssn = b.member_ssn
 and (b.service_from_date between a.shell_end and a.seven_day_window)
 where (b.major_service_category = 'Inpatient Facility' and b.dsc_with_hierarchy not in ('Hospice', 'SNF'))
 and b.reversal_flag = 1
-  group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,43,44,45,46),
+  group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,43,44,45,46, 47, 48, 49),
 
 
 Readmit_thirty_days as (
@@ -530,7 +539,7 @@ on a.member_ssn = b.member_ssn
 and (b.service_from_date between a.shell_end and a.thirty_day_window)
 where (b.major_service_category = 'Inpatient Facility' and b.dsc_with_hierarchy not in ('Hospice', 'SNF'))
 and b.reversal_flag = 1
-  group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,43,44,45,46,47,48,49,50),
+  group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,43,44,45,46,47,48,49,50, 51, 52, 53),
   
 
 Readmit_sixty_days as (
@@ -548,11 +557,4 @@ on a.member_ssn = b.member_ssn
 and (b.service_from_date between a.shell_end and a.sixty_day_window)
 where (b.major_service_category = 'Inpatient Facility' and b.dsc_with_hierarchy not in ('Hospice', 'SNF'))
 and b.reversal_flag = 1
-  group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,43,44,45,46,47,48,49,50,51)
-
-
-select *
-from Readmit_sixty_days
-limit 100
-
-
+  group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,43,44,45,46,47,48,49,50,51, 52, 53, 54)
