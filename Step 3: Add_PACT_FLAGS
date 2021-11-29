@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS "testdb"."vt_sample_claimants_75kmbrs_enc_with_PACT" as
+-- CREATE TABLE IF NOT EXISTS "testdb"."vt_sample_claimants_75kmbrs_enc_with_PACT" as
 
 
 -- sample data with BETOS and AAPC mappings + PAL
@@ -210,21 +210,53 @@ sixty_day_Readmit as (
    and a.pact_flag = 'Non PACT'
   group by 1,2),
 
+
+
+
 /* join back to encounter table */
 -- join SNF flags
 SNF_PACT_Flags as (
 select a.*
-, b.seven_day_SNF
-, c.thirty_day_SNF
-, d.sixty_day_SNF
-, (case when
-   b.seven_day_SNF > 0 then 1 
+, (case 
+   when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT') then b.seven_day_SNF
+   else NULL end) as seven_day_SNF
+
+, (case 
+when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT') then c.thirty_day_SNF
+   else NULL end) as thirty_day_SNF
+  
+, (case 
+when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT') then d.sixty_day_SNF
+   else NULL end) as sixty_day_SNF
+   
+, (case when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT'
+and b.seven_day_SNF > 0) then 1 
    else NULL end) as seven_day_SNF_Flag
-, (case when
-   c.thirty_day_SNF > 0 then 1 
+
+, (case when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT'
+and c.thirty_day_SNF > 0) then 1 
    else NULL end) as thirty_day_SNF_Flag
-, (case when
-   d.sixty_day_SNF > 0 then 1 
+
+, (case when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT'
+and d.sixty_day_SNF > 0) then 1 
    else NULL end) as sixty_day_SNF_Flag
 
   
@@ -238,27 +270,48 @@ on (a.member_ssn = c.member_ssn and a.encounter_key = c.encounter_key)
 
 left join sixty_day_SNF d
 on (a.member_ssn = d.member_ssn and a.encounter_key = d.encounter_key)
-
-where a.acute_IP_flag = 1 
-   and a.rank_pal_enc_key = 1
-   and a.final_pos_type = 'IP' 
-   and a.pact_flag = 'Non PACT'),
-
+  ),
+  
+   
   
 HH_PACT_Flags as (  
   select a.*
-, e.seven_day_HH
-, f.thirty_day_HH
-, g.sixty_day_HH
+, (case when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT') then e.seven_day_HH
+   else NULL end ) as seven_day_HH
+, (case when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT') then f.thirty_day_HH
+   else NULL end) as thirty_day_HH
+
+,( case when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT') then g.sixty_day_HH
+  else NULL end) as sixty_day_HH
   
-, (case when
-   e.seven_day_HH > 0 then 1 
+, (case when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT'
+and e.seven_day_HH > 0) then 1 
    else NULL end) as seven_day_HH_Flag
-, (case when
-   f.thirty_day_HH > 0 then 1 
+
+, (case when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT'
+and f.thirty_day_HH > 0) then 1 
    else NULL end) as thirty_day_HH_Flag
-, (case when
-   g.sixty_day_HH > 0 then 1 
+
+, (case when (a.acute_IP_flag = 1 
+and a.rank_pal_enc_key = 1
+and a.final_pos_type = 'IP' 
+and a.pact_flag = 'Non PACT'
+and g.sixty_day_HH > 0) then 1 
    else NULL end) as sixty_day_HH_Flag
   
 from SNF_PACT_Flags a
@@ -271,23 +324,29 @@ on (a.member_ssn = f.member_ssn and a.encounter_key = f.encounter_key)
 
 left join sixty_day_HH g
 on (a.member_ssn = g.member_ssn and a.encounter_key = g.encounter_key)
+),
 
-where a.acute_IP_flag = 1 
-   and a.rank_pal_enc_key = 1
-   and a.final_pos_type = 'IP' 
-   and a.pact_flag = 'Non PACT'),
-   
+
 
 READMIT_PACT_Flags as (  
   select a.*  
-, (case when
-   h.seven_day_Readmit > 0 then 1 
+, (case when (a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+   and h.seven_day_Readmit > 0) then 1 
    else NULL end) as seven_day_Readmit_Flag
-, (case when
-   i.thirty_day_Readmit > 0 then 1 
+, (case when (a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+   and i.thirty_day_Readmit > 0) then 1 
    else NULL end) as thirty_day_Readmit_Flag
-, (case when
-   j.sixty_day_Readmit > 0 then 1 
+, (case when (a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+   and j.sixty_day_Readmit > 0) then 1 
    else NULL end) as sixty_day_Readmit_Flag
   
 from HH_PACT_Flags a
@@ -300,12 +359,8 @@ on (a.member_ssn = i.member_ssn and a.encounter_key = i.encounter_key)
 
 left join sixty_day_Readmit j
 on (a.member_ssn = j.member_ssn and a.encounter_key = j.encounter_key)
-
-where a.acute_IP_flag = 1 
-   and a.rank_pal_enc_key = 1
-   and a.final_pos_type = 'IP' 
-   and a.pact_flag = 'Non PACT')
+)
    
    
-select * 
+select count(*) 
 from READMIT_PACT_Flags 
