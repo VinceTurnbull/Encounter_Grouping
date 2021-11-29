@@ -1,0 +1,311 @@
+CREATE TABLE IF NOT EXISTS "testdb"."vt_sample_claimants_75kmbrs_enc_with_PACT" as
+
+
+-- sample data with BETOS and AAPC mappings + PAL
+with sample_data as (
+SELECT a.*
+-- , c.pal as Excellus_PAL
+, a.pal_category as PAL_mapping
+, b.short_description as AAPC_short_desc
+, b.section1 as AAPC_section1
+, b.section2 as AAPC_section2
+, d.rbcs_id
+, d.rbcs_cat_desc
+, d.rbcs_subcat_desc
+, d.rbcs_family_desc
+, d.rbcs_major_ind
+, (case when a.dsc_with_hierarchy in ('Home Health', 'SNF') then a.dsc_with_hierarchy else 'Non PACT' end )as PACT_FLAG
+FROM "testdb"."vt_sample_claimants_75kmbrs_add_utilcounting" a
+left join "reference_library"."aapc_cpt_hcpcs_grouping" b
+on a.procedure_code = b.code
+-- left join testdb.vt_sample_excellusPAL  c
+
+left join "testdb"."servicemapping_betos" d
+on a.procedure_code = d.procedure_code
+order by a.member_ssn, a.service_from_date),
+
+
+final_pos_type as (
+select *
+from "testdb"."vt_sample_claimants_75kmbrs_enc_assignment"),
+
+
+
+/********************* PACT Flags **************/
+/* helper tables below then join back to encounter table */
+
+-- SNF Identification
+SNF_Identification as(
+  select member_ssn
+  ,service_from_date
+  ,major_service_category
+  ,dsc_with_hierarchy
+  , sum(allowed_amount) as allowed_amount
+  from  sample_data
+  where dsc_with_hierarchy = 'SNF' 
+  and reversal_flag = 1
+  group by 1,2,3,4),
+  
+-- HH Identification
+HH_Identification as(
+  select member_ssn
+  ,service_from_date
+  ,major_service_category
+  ,dsc_with_hierarchy
+  , sum(allowed_amount) as allowed_amount
+  from  sample_data
+  where dsc_with_hierarchy = 'Home Health' 
+  and reversal_flag = 1
+  group by 1,2,3,4),
+
+
+-- Readmit Identification
+IP_Readmit_Identification as(
+  select member_ssn
+  ,service_from_date
+  ,major_service_category
+  ,dsc_with_hierarchy
+  , sum(allowed_amount) as allowed_amount
+  from  sample_data
+  where major_service_category = 'Inpatient Facility' 
+  and dsc_with_hierarchy not in ('Hospice', 'SNF') 
+  and reversal_flag = 1
+  group by 1,2,3,4),
+ 
+ 
+ 
+-- seven day SNF  
+seven_day_SNF as (
+  select a.member_ssn
+  , a.encounter_key
+  , sum(b.allowed_amount) as seven_day_SNF
+  from final_pos_type a
+  inner join SNF_Identification b
+  on a.member_ssn = b.member_ssn
+  and (b.service_from_date between a.shell_end and a.seven_day_window)
+  where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+  group by 1,2),
+   
+-- thirty day SNF  
+thirty_day_SNF as (
+  select a.member_ssn
+  , a.encounter_key
+  , sum(b.allowed_amount) as thirty_day_SNF
+  from final_pos_type a
+  inner join SNF_Identification b
+  on a.member_ssn = b.member_ssn
+  and (b.service_from_date between a.shell_end and a.thirty_day_window)
+  where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+  group by 1,2),
+
+-- sixty day SNF  
+sixty_day_SNF as (
+  select a.member_ssn
+  , a.encounter_key
+  , sum(b.allowed_amount) as sixty_day_SNF
+  from final_pos_type a
+  inner join SNF_Identification b
+  on a.member_ssn = b.member_ssn
+  and (b.service_from_date between a.shell_end and a.sixty_day_window)
+  where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+  group by 1,2),
+
+
+-- seven day HH
+seven_day_HH as (
+  select a.member_ssn
+  , a.encounter_key
+  , sum(b.allowed_amount) as seven_day_HH
+  from final_pos_type a
+  inner join HH_Identification b
+  on a.member_ssn = b.member_ssn
+  and (b.service_from_date between a.shell_end and a.seven_day_window)
+  where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+  group by 1,2),
+
+-- thirty day HH
+thirty_day_HH as (
+  select a.member_ssn
+  , a.encounter_key
+  , sum(b.allowed_amount) as thirty_day_HH
+  from final_pos_type a
+  inner join HH_Identification b
+  on a.member_ssn = b.member_ssn
+  and (b.service_from_date between a.shell_end and a.thirty_day_window)
+  where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+  group by 1,2),
+
+-- sixty day HH
+sixty_day_HH as (
+  select a.member_ssn
+  , a.encounter_key
+  , sum(b.allowed_amount) as sixty_day_HH
+  from final_pos_type a
+  inner join HH_Identification b
+  on a.member_ssn = b.member_ssn
+  and (b.service_from_date between a.shell_end and a.sixty_day_window)
+  where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+  group by 1,2),
+
+-- seven day Readmit
+seven_day_Readmit as (
+  select a.member_ssn
+  , a.encounter_key
+  , sum(b.allowed_amount) as seven_day_Readmit
+  from final_pos_type a
+  inner join IP_Readmit_Identification b
+  on a.member_ssn = b.member_ssn
+  and (b.service_from_date between a.shell_end and a.seven_day_window)
+  where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+  group by 1,2),
+
+-- thirty day Readmit
+thirty_day_Readmit as (
+  select a.member_ssn
+  , a.encounter_key
+  , sum(b.allowed_amount) as thirty_day_Readmit
+  from final_pos_type a
+  inner join IP_Readmit_Identification b
+  on a.member_ssn = b.member_ssn
+  and (b.service_from_date between a.shell_end and a.thirty_day_window)
+  where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+  group by 1,2),
+
+-- sixty day Readmit
+sixty_day_Readmit as (
+  select a.member_ssn
+  , a.encounter_key
+  , sum(b.allowed_amount) as sixty_day_Readmit
+  from final_pos_type a
+  inner join IP_Readmit_Identification b
+  on a.member_ssn = b.member_ssn
+  and (b.service_from_date between a.shell_end and a.sixty_day_window)
+  where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'
+  group by 1,2),
+
+/* join back to encounter table */
+-- join SNF flags
+SNF_PACT_Flags as (
+select a.*
+, b.seven_day_SNF
+, c.thirty_day_SNF
+, d.sixty_day_SNF
+, (case when
+   b.seven_day_SNF > 0 then 1 
+   else NULL end) as seven_day_SNF_Flag
+, (case when
+   c.thirty_day_SNF > 0 then 1 
+   else NULL end) as thirty_day_SNF_Flag
+, (case when
+   d.sixty_day_SNF > 0 then 1 
+   else NULL end) as sixty_day_SNF_Flag
+
+  
+from final_pos_type a
+
+left join seven_day_SNF b
+on (a.member_ssn = b.member_ssn and a.encounter_key = b.encounter_key)
+
+left join thirty_day_SNF c
+on (a.member_ssn = c.member_ssn and a.encounter_key = c.encounter_key)
+
+left join sixty_day_SNF d
+on (a.member_ssn = d.member_ssn and a.encounter_key = d.encounter_key)
+
+where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'),
+
+  
+HH_PACT_Flags as (  
+  select a.*
+, e.seven_day_HH
+, f.thirty_day_HH
+, g.sixty_day_HH
+  
+, (case when
+   e.seven_day_HH > 0 then 1 
+   else NULL end) as seven_day_HH_Flag
+, (case when
+   f.thirty_day_HH > 0 then 1 
+   else NULL end) as thirty_day_HH_Flag
+, (case when
+   g.sixty_day_HH > 0 then 1 
+   else NULL end) as sixty_day_HH_Flag
+  
+from SNF_PACT_Flags a
+ 
+left join seven_day_HH e
+on (a.member_ssn = e.member_ssn and a.encounter_key = e.encounter_key)
+
+left join thirty_day_HH f
+on (a.member_ssn = f.member_ssn and a.encounter_key = f.encounter_key)
+
+left join sixty_day_HH g
+on (a.member_ssn = g.member_ssn and a.encounter_key = g.encounter_key)
+
+where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT'),
+   
+
+READMIT_PACT_Flags as (  
+  select a.*  
+, (case when
+   h.seven_day_Readmit > 0 then 1 
+   else NULL end) as seven_day_Readmit_Flag
+, (case when
+   i.thirty_day_Readmit > 0 then 1 
+   else NULL end) as thirty_day_Readmit_Flag
+, (case when
+   j.sixty_day_Readmit > 0 then 1 
+   else NULL end) as sixty_day_Readmit_Flag
+  
+from HH_PACT_Flags a
+ 
+left join seven_day_Readmit h
+on (a.member_ssn = h.member_ssn and a.encounter_key = h.encounter_key)
+
+left join thirty_day_Readmit i
+on (a.member_ssn = i.member_ssn and a.encounter_key = i.encounter_key)
+
+left join sixty_day_Readmit j
+on (a.member_ssn = j.member_ssn and a.encounter_key = j.encounter_key)
+
+where a.acute_IP_flag = 1 
+   and a.rank_pal_enc_key = 1
+   and a.final_pos_type = 'IP' 
+   and a.pact_flag = 'Non PACT')
+   
+   
+select * 
+from READMIT_PACT_Flags 
