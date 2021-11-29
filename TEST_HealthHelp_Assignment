@@ -29,6 +29,7 @@ triggers_plus_shells as (
 select * from  "testdb"."vt_sample_claimants_75kmbrs_Enc_TriggerShells_HealthHelp" ),
 
 
+
 /******************************* Assignment**************************/
 -- select primary triggers
 -- primary triggers - still need one more level of deduping after this to get rid of encoutner keys in OP billed with same proc code
@@ -185,7 +186,7 @@ and enctable_rbcs_subcat != claimstable_rbcs_subcat),
 /********************* Xwalk from Enc to Claims Table ********************/
 
 -- assignment to M rbcs categories, no carve out
-M_assignment_nocarve_Xwalk as (
+/*M_assignment_nocarve_Xwalk as (
 select a.encounter_key 
 , a.member_ssn
 , (case when a.rank_PAL_enc_key = 1 then b.unique_key
@@ -255,7 +256,7 @@ select * from AllOther_assignment_nocarve_Xwalk),
 XWalk_to_Claims as (
 select * 
 from Merge_Xwalk_Tables 
-group by 1,2,3,4),
+group by 1,2,3,4),*/
 
 
 /********************* Flags ********************/
@@ -275,7 +276,7 @@ add_stochastic_event_flag as (
 select a.*
 , (case 
    when encounter_key in (select encounter_key from stochastic_event where stochastic_event_flag = 1) then 1 
-   else 0 end) as stochastic_event_flag
+   else 0 end) as stocahstic_event_flag
 from dedup_encounters a),
 
 -- ER event; if there is an ER admit on the same day as the beginning of the trigger event, flag for exclusion
@@ -301,88 +302,84 @@ select *
      when rank_pal_enc_key > 1 then NULL
      when (rank_pal_enc_key = 1 and encounter_key in (select * from flag_rbcs_proc_cat_conflict)) then allowed
      else enc_cost_no_carveout end) as final_enc_cost           
-from Add_ER_Flag)
+from Add_ER_Flag),
+
+/************PACT flags***********/ 
+
+-- Acute IP stay identification
+IP_Acute_Identification as(
+  select member_ssn
+  ,service_from_date
+  ,major_service_category
+  ,dsc_with_hierarchy
+  from  sample_data
+  where dsc_with_hierarchy not in( 'Hospice', 'SNF')
+  and major_service_category not in ('Outpatient Facility', 'Professional Services')
+  group by 1,2,3,4),
 
 
+-- Add acute IP flag; confirms whether acute IP facility claims were incurred during the encouter
+Acute_IP_flag as (
+select *
+, (case when encounter_key in 
+(   select a.encounter_key
+ from fix_rbcs_proc_cat_conflict a
+ inner join IP_Acute_Identification b
+ on (b.service_from_date between a.shell_start and a.shell_end)
+ and a.member_ssn = b.member_ssn
 
-select pal_mapping
-, pos_type
-, sum(allowed) as trigger_code_allowed
--- , sum(enc_cost_no_carveout) as before_fix
-, sum(final_enc_cost) as final_enc_cost
-, count(*) as enc_count
-from fix_rbcs_proc_cat_conflict
+ where a.rbcs_cat_desc = 'Procedure'
+ and a.final_enc_cost = a.enc_cost_no_carveout
+ and a.rank_pal_enc_key = 1
+ and a.pact_flag = 'Non PACT') then 1 
+   else 0 end) as Acute_IP_Flag
+
+from fix_rbcs_proc_cat_conflict ),
+
+-- clean up the pos_type field. Sometimes a provider bills as OP when there is clearly an IP stay happening alongside, and vice versa
+-- Identify encounter_keys for cleanup
+
+fix_pos_type as(
+select encounter_key
+, (case 
+   when (acute_IP_flag = 1 and pos_type = 'OP') then 'IP'
+   when (acute_IP_flag = 0 and pos_type = 'IP') then 'OP'
+   else pos_type end) as fix_pos_type
+from acute_IP_flag 
 where rank_pal_enc_key = 1
-and ER_flag = 0
-and stochastic_event_flag = 0
+and final_enc_cost = enc_cost_no_carveout
+and pact_flag = 'Non PACT'
+and rbcs_major_ind in ('M')
+group by 1,2),
+
+
+-- clean up final pos type, also add time window for post acute analysis flags
+  final_pos_type as (
+  select *
+  , (case when (acute_IP_flag = 1 
+                and pos_type = 'OP' 
+                and final_enc_cost = enc_cost_no_carveout 
+                and  pact_flag = 'Non PACT' 
+                and rbcs_major_ind in ('M')) then 'IP'
+     when (acute_IP_flag = 0 
+                and pos_type = 'IP' 
+                and final_enc_cost = enc_cost_no_carveout 
+                and  pact_flag = 'Non PACT' 
+                and rbcs_major_ind in ('M')) then 'OP'
+     else pos_type end) as final_pos_type
+  , date_add('day', 7, shell_end) as seven_day_window
+  , date_add('day', 30, shell_end) as thirty_day_window
+  , date_add('day', 60, shell_end) as sixty_day_window
+  from acute_IP_flag)
+  
+  
+select pal_mapping
+, final_pos_type
+, sum(final_enc_cost)
+, count(*) 
+from final_pos_type
 group by 1,2
 order by 1,2
 
-
-
-
-
--- paid date for IBNR
--- IP acute during the shell
--- HH, SNF %
--- HH, SNF $
--- readmit
-
-
-
-/********************* Summaries ********************/
-
-
-
-/********************* Testing ********************/
-
--- check to make sure encounter Table costs equal mapping on claims Table
-
-/*check_xwalk as 
-(select a.encounter_key
-, a.unique_key_xwalk
-, a.rbcs_major_ind
-, sum(b.allowed_amount) as allowed_from_ClaimsTable
-from Merge_Xwalk_Tables a
-left join sample_data b
-on a.unique_key_xwalk = b.unique_key
-where a.rbcs_major_ind = 'M'
-group by 1,2,3
-
-
-UNION ALL
-
-select a.encounter_key
-, a.unique_key_xwalk
-, a.rbcs_major_ind
-, sum(b.allowed_amount) as allowed_from_ClaimsTable
-from Merge_Xwalk_Tables a
-left join sample_data b
-on a.unique_key_xwalk = b.unique_key_ungrouped
-where a.rbcs_major_ind != 'M'
-group by 1,2,3)
-
-
-
-select * from (
-select a.* 
-, b.enc_cost_no_carveout as enc_allowed_from_encTable
-, sum(a.allowed_from_ClaimsTable) over (partition by a.encounter_key) as enc_allowed_from_claims
-from check_xwalk a
-left join Add_ER_Flag b
-on a.encounter_key = b.encounter_key
-where b.rank_pal_enc_key = 1)
-where enc_allowed_from_encTable != enc_allowed_from_claims
-and encounter_key = '2454262502019-04-062019-04-16'
-order by encounter_key
-
--- select * from XWalk_to_Claims 
--- where encounter_key = '2298207282019-08-142019-08-23'
-
-
-
--- select * from Add_ER_Flag where encounter_key = '2298207282019-08-142019-08-23'
-
-*/
 
 
