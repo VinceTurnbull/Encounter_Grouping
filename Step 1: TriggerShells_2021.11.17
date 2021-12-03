@@ -1,208 +1,280 @@
-CREATE TABLE IF NOT EXISTS "testdb"."vt_sample_claimants_75kmbrs_Enc_TriggerShells" as
+--  CREATE TABLE IF NOT EXISTS "testdb"."vt_sample_ga_iora_enc_encounterids_v2" AS
 
+with trigger_and_shells as (
+  select shell_key, unique_key, member_ssn
+  from "testdb"."vt_sample_GA_Iora_Enc_TriggerShells_v2"
+  group by 1,2,3),
 
--- sample data with BETOS and AAPC mappings + PAL
-with sample_data as (
-SELECT a.*
--- , c.pal as Excellus_PAL
-, a.pal_category as PAL_mapping
-, b.short_description as AAPC_short_desc
-, b.section1 as AAPC_section1
-, b.section2 as AAPC_section2
+add_initial_shell_key as (
+select a.*
+, (case 
+   when a.major_service_category = 'Inpatient Facility' and b.shell_key is NULL then concat(a.member_ssn, cast(a.coh_admit_date as varchar) , cast(a.coh_discharge_date as varchar))
+   else b.shell_key end) as shell_key
 , d.rbcs_id
 , d.rbcs_cat_desc
 , d.rbcs_subcat_desc
 , d.rbcs_family_desc
 , d.rbcs_major_ind
 , (case when a.dsc_with_hierarchy in ('Home Health', 'SNF') then a.dsc_with_hierarchy else 'Non PACT' end )as PACT_FLAG
-FROM "testdb"."vt_sample_claimants_75kmbrs_add_utilcounting" a
-left join "reference_library"."aapc_cpt_hcpcs_grouping" b
-on a.procedure_code = b.code
--- left join testdb.vt_sample_excellusPAL  c
+
+from "testdb"."vt_sample_GA_Iora_ServiceClassification" a
+left join trigger_and_shells b
+on a.unique_key = b.unique_key
+and a.member_ssn = b.member_ssn
 
 left join "testdb"."servicemapping_betos" d
 on a.procedure_code = d.procedure_code
-order by a.member_ssn, a.service_from_date),
+
+-- remove this  going foward!!
+-- 226 lines
+-- where a.member_ssn Like '%20289327%' 
+  ),
+
+clean_up_shell_key as (
+  select a.*
+  , (case
+     when shell_key is NULL and major_service_category != 'Professional Services' then concat(a.member_ssn, cast(a.coh_admit_date as varchar) , cast(a.coh_discharge_date as varchar))
+     when shell_key is NULL and major_service_category = 'Professional Services' then concat(a.member_ssn, cast(a.service_from_date as varchar) , cast(a.service_from_date as varchar))                                                                                       
+else shell_key end) as final_shell_key
+from add_initial_shell_key a),
 
 
 
-/********************************** Triggers************************/
--- Trigger identification, exclude reversals map pos for the trigger; grabbing a bunch of stuff to help us fill in encounters
--- don't know if split by proc and Dx code combination is good or not ... may make things too granualar for the trigger ranking in next step. Test out
--- 656,316 rows
+     
+Add_Procedure_Hierarchy_Shell_Key as (
+  select a.*
+  , (case when shell_key in (select distinct shell_key from clean_up_shell_key where rbcs_major_ind = 'M' ) then 'M'
+     when shell_key in (select distinct shell_key from clean_up_shell_key where rbcs_major_ind = 'O' ) then 'O'
+     else 'N' end) as shell_key_max
+  from clean_up_shell_key a),
+  
 
-triggers as(
-select * from (
-select member_ssn
-, service_from_date
-, major_service_category
-, dsc_with_hierarchy
-, dsc_no_hierarchy
-, (case when dsc_with_hierarchy in ('Home Health', 'SNF') then  dsc_with_hierarchy else 'Non PACT' end )as PACT_FLAG
-, unique_key
-, unique_key_ungrouped
-, procedure_code as trigger_code
-, provider_tin
-, PAL_mapping
-, pos
+/***************** Relevant Dxs to splut shells into related encounters***********/
+relevant_dxs as(
+  select final_shell_key
+  , concat((case 
+            when substring(diagnosis_code1,1,1) is NULL then 'NULL' 
+            else substring(diagnosis_code1,1,1) end)
+           , ','
+           , (case 
+            when substring(diagnosis_code2,1,1) is NULL then 'NULL' 
+            else substring(diagnosis_code2,1,1) end)) as Dx
+  from Add_Procedure_Hierarchy_Shell_Key
+  group by 1,2),
+
+Dx_xWalk as (
+select * 
+, rank() over(partition by final_shell_key order by allowed_amount_sum desc) as rank_Dx_combo
+from (
+select a.*
+, sum(b.allowed_amount) as allowed_amount_sum
+from relevant_dxs a
+inner join Add_Procedure_Hierarchy_Shell_Key b
+on a.final_shell_key = b.final_shell_key
+and (a.Dx LIKE concat('%', trim(substring(b.diagnosis_code1,1,1)) ,'%')
+     OR a.Dx LIKE concat('%', trim(substring(b.diagnosis_code2,1,1)) ,'%'))
+where substring(a.Dx,1,1) not in ('R', 'Z')
+and b.shell_key_max != 'M'
+group by 1,2)),
+
+
+
+-- split to columne
+Dx_to_column as (
+select a.*
+, split_part(Dx, ',', 1) as split_dx_1
+, split_part(Dx, ',', 2) as split_dx_2
+from Dx_xWalk a),
+
+-- final Dxs and dedup
+final_relevant_Dx as (
+select final_shell_key
+, Dx
+, rank_Dx_combo
+, (row_number() over(partition by final_shell_key, rank_Dx_combo )) as row_number
+from (
+select a.*
+, min(b.rank_Dx_combo) as min_Dx_rank
+from Dx_to_column a
+inner join Dx_to_column b
+on a.final_shell_key = b.final_shell_key
+and (a.Dx LIKE concat('%', trim(substring(b.split_dx_1,1,1)) ,'%')
+     or a.Dx LIKE concat('%', trim(substring(b.split_dx_2,1,1)) ,'%'))
+ group by 1,2,3,4,5,6)
+ where rank_Dx_combo = min_Dx_rank),
+ 
+ dedup_relevant_dxs as (
+ select *
+ from final_relevant_Dx
+  where row_number = 1),
+  
+
+
+
+-- Add enc key edits for M and O proc codes
+-- check if this is too loose of an assumption for Dxs with R and Z chapters
+split_shells as (
+select *
+  , concat(shell_key, cast(Shell_split_rbcsProcedures as varchar)) as encounter_ID
+from(
+select a.*
 , (case 
-   when major_service_category = 'Inpatient Facility' then 'IP'
-   when major_service_category = 'Outpatient Facility' then 'OP'
-   when pos in ('13','21', '27', '28', '31', '32', '33', '34', '35', '51', '55', '56', '61') then 'IP'
-   else 'OP' end) as pos_type
-, (case 
-   when major_service_category = 'Outpatient Facility' and pos = '24' then 'ASC'
-   when major_service_category = 'Professional Services' and pos = '24' then 'ASC'
-   else NULL end) as ASC_indicator
-, diagnosis_code1 as trigger_code_dx1
-, diagnosis_code2 as trigger_code_dx2
-, rbcs_cat_desc
-, rbcs_subcat_desc
-, rbcs_family_desc 
+   when a.shell_key_max = 'M' then 1 
+   when (a.shell_key_max != 'M' and substring(a.diagnosis_code1,1,1) in ('R', 'Z')) then 1
+   when (a.shell_key_max != 'M' and substring(a.diagnosis_code1,1,1) not in ('R', 'Z')) then b.rank_Dx_combo 
+   else NULL end) as Shell_split_rbcsProcedures
+from Add_Procedure_Hierarchy_Shell_Key a
+left join dedup_relevant_dxs b
+on a.final_shell_key = b.final_shell_key
+and (b.Dx LIKE concat('%', trim(substring(a.diagnosis_code1,1,1)) ,'%')
+     or b.Dx LIKE concat('%', trim(substring(a.diagnosis_code2,1,1)) ,'%'))
+  )),
+  
+
+/****** reassign the top rbcsID ********/
+rbcs_id_identification as (
+select encounter_ID
+, rbcs_id
 , rbcs_major_ind
-, reversal_flag
-, sum(allowed_amount) as allowed
-from sample_data
-where PAL_mapping is not NULL and PAL_mapping not in ('',' ')
-group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14, 15, 16,17,18, 19,20,21
-order by 1,2)
-  where reversal_flag != 0
-),
+, shell_key_max
+, sum(allowed_amount) as allowed_amount
+from split_shells
+where encounter_ID is not NULL
+and rbcs_id is not NULL
+group by 1,2,3,4),
 
--- Trigger ranking to break tie of multiple BETOS mappings that map to a same category of PAL Trigger on particular DOS and patient.
--- Will later scan through to see if multiple triggers are within same encounter to dedup further (ex two PALs during same encounter ... will carve out $s, see rank_PAL_enc_key below)
--- We assign the highest rank (1) to PAL-BETOS combination with highest $ amount. May also want to explore using RVUs?
+-- Encounters with M procedure, highest in hierarchy
+M_Enc as (
+select *
+, rank() over (partition by encounter_ID order by sum_allowed desc) as rank_rbcsID
+from(
+select encounter_ID
+, rbcs_id
+, sum(allowed_amount) as sum_allowed
+from rbcs_id_identification
+where rbcs_major_ind = 'M'
+group by 1,2)),
 
-ranked_triggers as (
+O_Enc as (
+select *
+, rank() over (partition by encounter_ID order by sum_allowed desc) as rank_rbcsID
+from(
+select encounter_ID
+, rbcs_id
+, sum(allowed_amount) as sum_allowed
+from rbcs_id_identification
+where rbcs_major_ind = 'O'
+  and encounter_ID not in (select encounter_ID from M_Enc)
+group by 1,2)),
+
+N_Enc as (
+select *
+, rank() over (partition by encounter_ID order by sum_allowed desc) as rank_rbcsID
+from(
+select encounter_ID
+, rbcs_id
+, sum(allowed_amount) as sum_allowed
+from rbcs_id_identification
+where rbcs_major_ind = 'N'
+  and encounter_ID not in (select encounter_ID from M_Enc)
+  and encounter_ID not in (select encounter_ID from O_Enc)
+group by 1,2)),
+
+Rank_rbcsID as (
 select * 
-  , concat(member_ssn, cast(service_from_date as varchar), trigger_code) as trigger_key_primary
-  from (
-select a.*
-, (row_number() over (partition by member_ssn, service_from_date, PAL_mapping order by allowed desc) ) rank_triggers
-from triggers a
-) 
-where rank_triggers = 1
-order by member_ssn, service_from_date),
+from M_Enc
+where rank_rbcsID = 1
 
-
--- MASTER Trigger LIST
-add_trigger_key as (
-select a.*
-, concat(a.member_ssn, cast(a.service_from_date as varchar), a.trigger_code) as trigger_key_no_hierarchy
-, b.trigger_key_primary 
-from triggers a
-inner join ranked_triggers b
-on a.member_ssn = b.member_ssn and a.service_from_date = b.service_from_date and a.PAL_mapping = b.PAL_mapping),
-
-
-/************************Shells********************/
-
--- Shells for BETOS M codes
--- first search for facility to attach, assign
-M_encounter_key as (
-select a.* 
-, concat(member_ssn, cast(shell_start as varchar) , cast(shell_end as varchar)) as encounter_key
-from (
-
-select a.coh_admit_date
-, a.coh_discharge_date
-, a.major_service_category
-, a.dsc_with_hierarchy
-, b.member_ssn
-, b.service_from_date
-, b.trigger_key_no_hierarchy
-, b.trigger_key_primary
-, b.unique_key
-, b.unique_key_ungrouped
-, ( min(a.coh_admit_date) over (partition by trigger_key_primary) ) as shell_start
-, ( max(a.coh_discharge_date) over (partition by trigger_key_primary) ) as shell_end
-from sample_data a
-inner join (select * 
-   from add_trigger_key 
-   where rbcs_major_ind = 'M') b 
-on (a.member_ssn = b.member_ssn and (b.service_from_date between a.coh_admit_date and  a.coh_discharge_date)) and a.PACT_FLAG = b.PACT_FLAG) a
-group by 1,2,3,4,5,6,7,8,9,10,11,12),
-
-
--- join back to primary triggers
-join_MTrigger_facility as(
-select a.* 
-, b.encounter_key
-, b.shell_start
-, b.shell_end
-from add_trigger_key a
-left join (select trigger_key_primary, encounter_key, shell_start, shell_end from M_encounter_key group by 1,2,3,4) b
-on a.trigger_key_primary = b.trigger_key_primary
-where a.trigger_key_primary = a.trigger_key_no_hierarchy),
-
-
-
-dedup_MTrigger_facility as (
-select * from (
-select member_ssn
-, encounter_key
-, shell_start
-, shell_end
-, PACT_FLAG
-, min(service_from_date) OVER (partition by encounter_key) as encounter_incurred_date
-from join_MTrigger_facility 
-where encounter_key is not NULL )
-group by 1,2,3,4,5,6),
-
-
-
--- join back to all triggers
--- make sure all M rbcs levels get assigned; noticed a few records where the professional charge occured a few days before a facility admit, so handle as start and end on same day
-Join_to_triggers as(
-
-select  c.*
-  , (case
-    when d.encounter_key is not NULL then d.encounter_key
-    else concat(member_ssn, cast(c.service_from_date as varchar) , cast(c.service_from_date as varchar)) end) as encounter_key
-  , (case
-    when d.shell_start is not NULL then d.shell_start 
-    else c.service_from_date end) as shell_start
-  , (case
-    when d.shell_end is not NULL then d.shell_end
-    else c.service_from_date end) as shell_end
-  , (case
-    when d.encounter_incurred_date is not NULL then d.encounter_incurred_date
-    else  c.service_from_date end) as encounter_incurred_date
-from add_trigger_key c
-
-left join (
-select  a.encounter_key 
-, a.shell_start
-, a.shell_end
-, a.encounter_incurred_date
-, b.trigger_key_no_hierarchy
-from dedup_MTrigger_facility a
-left join add_trigger_key  b
-on a.member_ssn = b.member_ssn and (b.service_from_date between a.shell_start and a.shell_end) and a.PACT_FLAG = b.PACT_FLAG
-group by 1,2,3,4,5) d
-
-on c.trigger_key_no_hierarchy = d.trigger_key_no_hierarchy),
-
-
-/****** Final Trigger + Shell Table********/
--- MASTER Trigger LIST + SHELL DEFINITONS
--- sum up claims to determine the PAL category with highest amount of claims on a given day (non M rbcs)
-
-triggers_plus_shells as (select a.* 
-, b.rank_PAL_enc_key
-from Join_to_triggers a
-left join (select * 
-, row_number() over (partition by encounter_key order by allowed desc) as rank_PAL_enc_key
-from (
-select encounter_key
-, PAL_mapping
-, sum(allowed) as allowed
-from Join_to_triggers
-group by 1,2)) b                  
-on a.encounter_key = b.encounter_key and a.PAL_mapping = b.PAL_mapping)
-
+UNION ALL
 
 select * 
-from triggers_plus_shells
+from O_Enc
+where rank_rbcsID = 1
+
+UNION ALL
+
+select * 
+from N_Enc
+where rank_rbcsID = 1),
+
+
+/************************ Join top rbcsID back to claims **************/ 
+join_top_rbcs as (
+select a.*
+, b.rbcs_id as top_rbcsID
+from split_shells a
+left join Rank_rbcsID b
+on a.encounter_ID = b.encounter_ID),
+
+
+
+RBCS_IDs as (
+  select rbcs_ID
+  , rbcs_cat_desc
+  , rbcs_subcat_desc
+  , rbcs_family_desc
+  from  "testdb"."servicemapping_betos"
+  group by 1,2,3,4),
+
+-- final Enc rbcs mapping
+final_Enc_mapping as (
+select *
+, (case when (encounter_ID is NULL and reversal_flag = 1 and dsc_with_hierarchy in( 'SNF', 'Home Health')) then concat(final_shell_key, '_PACT')
+   else encounter_ID end) as encounter_ID_final
+
+, (case when (encounter_ID is NULL and reversal_flag = 1 and dsc_with_hierarchy in( 'SNF', 'Home Health')) then 'Other Facility'
+   else ENC_rbcs_cat_desc end) as ENC_rbcs_cat_desc_final
+
+, (case when (encounter_ID is NULL and reversal_flag = 1 and dsc_with_hierarchy in( 'SNF', 'Home Health')) then 'Other Facility'
+   else ENC_rbcs_subcat_desc end) as ENC_rbcs_subcat_desc_final
+
+, (case when (encounter_ID is NULL and reversal_flag = 1 and dsc_with_hierarchy in( 'SNF', 'Home Health')) then 'Other Facility'
+   else ENC_rbcs_family_desc end) as ENC_rbcs_family_desc_final
+   
+ from (
+select a.*
+, d.rbcs_cat_desc as ENC_rbcs_cat_desc
+, d.rbcs_subcat_desc as ENC_rbcs_subcat_desc
+, d.rbcs_family_desc as ENC_rbcs_family_desc
+from join_top_rbcs a
+left join RBCS_IDs d
+on a.top_rbcsID = d.rbcs_ID
+order by service_from_date)),
+
+
+pos_assignment as (
+select *
+from (
+select encounter_ID_final
+, pos_type
+, rank() over (partition by encounter_ID_final order by allowed_amount desc) pos_rank
+from (
+select encounter_ID_final
+, (case 
+   when (major_service_category = 'Inpatient Facility' or (major_service_category = 'Professional Services' and pos in ('13','21', '27', '28', '31', '32', '33', '34', '35', '51', '55', '56', '61'))) then 'IP'
+   else 'OP' end) pos_type
+, sum(allowed_amount) as allowed_amount
+from final_Enc_mapping
+group by 1,2)
+  )
+ where pos_rank = 1
+  group by 1,2,3)
+ 
+ -- map pos
+ select a.*
+ , (case when a.encounter_ID_final LIKE '%_PACT' then a.dsc_with_hierarchy
+    else b.pos_type end) as pos_type
+ from final_Enc_mapping a
+ left join pos_assignment b
+ on a.encounter_ID_final =  b.encounter_ID_final
+
+
+
+
+
+
+
+
+
 
 
